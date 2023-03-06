@@ -1,8 +1,15 @@
+// Spreadsheets
 const MOCK_RESTORE = "https://docs.google.com/spreadsheets/d/1ladSAv2Z-2f3Ri-VCGEuckFboEARi8J35A1nEXBxyrM/edit"
 const HK01MALL_ORDER_MGMT_REPORT_URL = "https://docs.google.com/spreadsheets/d/1GjJmrkOiuyxAyF6EM7ZgJF_RPI0uB80B8JI3GnYATzM/edit"
-const HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME = "工作表1"
 const HK01MALL_SETTLE_REPORT_URL = "https://docs.google.com/spreadsheets/d/1X7vtKzmoay2_uU2vQXlPsPOyA-BYx1HmZJmEPha_e0A/edit"
 
+//Tab names from 01網購_訂單管理報表Template
+const HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME = "工作表1"
+
+// Tab names from 01mall 結算 | Checking log sheet
+const MAP_MERCHANT = "Map Merchant"
+
+//Columns from 01網購_訂單管理報表Template
 const COL_COMMISSION = "佣金"
 const COL_COG = "單件COG"
 const COL_SETTLEMENT_PRICE = "結算價"
@@ -10,7 +17,13 @@ const COL_ORDER_STATUS = "訂單狀態"
 const COL_DELIVERY_FEE = "運費"
 const COL_CHILD_ORDER_ID = "子訂單ID"
 const COL_ORDER_ID = "主訂單ID"
+const COL_SHOP_ID = "店鋪ID"
 
+//Columns from 01mall 結算 | Checking log sheet
+const COL_COMMISSION_RATE = "Commission Rate"
+const COL_SHOP_NO = "01mall Shop #"
+
+// Orderstatus from from 01網購_訂單管理報表Template
 const OrderStatus = {
   MANUAL_CANCELLED: "已取消(主動)",
   AUTO_CANCELLED: "已取消(自動)",
@@ -164,6 +177,33 @@ function restoreMockData() {
   copyTo(from, to)
 }
 
+// 01mall shop = 店鋪ID
+function copyCommissionRate() {
+  const hk01MallSettleSS = SpreadsheetApp.openByUrl(HK01MALL_SETTLE_REPORT_URL)
+  const hk01MallOrderMgmtSS = SpreadsheetApp.openByUrl(HK01MALL_ORDER_MGMT_REPORT_URL)
+  const orderSheet = hk01MallOrderMgmtSS.getSheetByName(HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME)
+  const settleSheet = hk01MallSettleSS.getSheetByName(MAP_MERCHANT)
+  const colSettleCommRatePos = Helper.getColumnPos(COL_COMMISSION_RATE, settleSheet)
+  const colSettleShopIdPos = Helper.getColumnPos(COL_SHOP_NO, settleSheet)
+  const colOrderCommPos = Helper.getColumnPos(COL_COMMISSION, orderSheet)
+  const colOrderShopIdPos = Helper.getColumnPos(COL_SHOP_ID, orderSheet)
+  const settleSheetData = settleSheet.getDataRange().getValues();
+  const orderSheetData = orderSheet.getDataRange().getValues();
+  for (let i = 0; i < settleSheetData.length; i++) {
+    const settleCommRate = settleSheetData[i][colSettleCommRatePos]
+    const settleShopId = settleSheetData[i][colSettleShopIdPos]
+    for (let j = 0; j < orderSheetData.length; j++) {
+      const orderShopId = orderSheetData[j][colOrderShopIdPos];
+
+      if (settleShopId === orderShopId) {
+        const range = orderSheet.getRange(j, colOrderCommPos + 1)
+        range.setValue(settleCommRate)
+        break;
+      }
+    }
+  }
+}
+
 function main() {
   const hk01MallOrderMgmtSS = SpreadsheetApp.openByUrl(HK01MALL_ORDER_MGMT_REPORT_URL)
   const orderSheet = hk01MallOrderMgmtSS.getSheetByName(HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME)
@@ -181,7 +221,6 @@ function main() {
 
   // Copy from 01mall 結算 | Checking log sheet into 01網購_訂單管理報表Template
   const hk01MallSettleSS = SpreadsheetApp.openByUrl(HK01MALL_SETTLE_REPORT_URL)
-  console.log(hk01MallSettleSS.getName())
   const mapMerchantSheet = hk01MallSettleSS.getSheetByName("MAP Merchant")
   const mapCogSheet = hk01MallSettleSS.getSheetByName("Consignment Merchant")
 
@@ -191,7 +230,9 @@ function main() {
   // Remove duplicated order by delivery fee 
   // If any of orders has delivery fee > 0, remove orders except that one
   // If none of orders have delivery fee > 0, use any one of them
-  removeDuplicatedDeliveryFee(orderSheet)
+  // removeDuplicatedDeliveryFee(orderSheet)
+
+  copyCommissionRate()
 
   // restoreMockData()
 }
