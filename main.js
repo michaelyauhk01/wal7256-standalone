@@ -1,38 +1,49 @@
-// Spreadsheets
-const MOCK_RESTORE = "https://docs.google.com/spreadsheets/d/1ladSAv2Z-2f3Ri-VCGEuckFboEARi8J35A1nEXBxyrM/edit"
-const HK01MALL_ORDER_MGMT_REPORT_URL = "https://docs.google.com/spreadsheets/d/1GjJmrkOiuyxAyF6EM7ZgJF_RPI0uB80B8JI3GnYATzM/edit"
-const HK01MALL_SETTLE_REPORT_URL = "https://docs.google.com/spreadsheets/d/1X7vtKzmoay2_uU2vQXlPsPOyA-BYx1HmZJmEPha_e0A/edit"
-
-//Tab names from 01網購_訂單管理報表Template
-const HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME = "工作表1"
-
-// Tab names from 01mall 結算 | Checking log sheet
-const MAP_MERCHANT = "Map Merchant"
-
-//Columns from 01網購_訂單管理報表Template
-const COL_COMMISSION = "佣金"
-const COL_COG = "單件COG"
-const COL_SETTLEMENT_PRICE = "結算價"
-const COL_ORDER_STATUS = "訂單狀態"
-const COL_DELIVERY_FEE = "運費"
-const COL_CHILD_ORDER_ID = "子訂單ID"
-const COL_ORDER_ID = "主訂單ID"
-const COL_SHOP_ID = "店鋪ID"
-
-//Columns from 01mall 結算 | Checking log sheet
-const COL_COMMISSION_RATE = "Commission Rate"
-const COL_SHOP_NO = "01mall Shop #"
-
-// Orderstatus from from 01網購_訂單管理報表Template
-const OrderStatus = {
-  MANUAL_CANCELLED: "已取消(主動)",
-  AUTO_CANCELLED: "已取消(自動)",
-  FINISHED: "已完成",
-  PENDING_FOR_TAKEN: "待取貨",
-  PENDING_FOR_SENT: "待發貨"
+// Envs? Maybe? This stuff is to map the values on the spreadsheet
+const config = {
+  spreadsheet: {
+    //For resetting the spreadsheet with the original copy (testing purpose)
+    originalOrderMgmtReport: {
+      url: "https://docs.google.com/spreadsheets/d/1ladSAv2Z-2f3Ri-VCGEuckFboEARi8J35A1nEXBxyrM/edit",
+      sheet: {
+        tab1: "工作表1",
+      },
+    },
+    orderMgmtReport: {
+      url: "https://docs.google.com/spreadsheets/d/1GjJmrkOiuyxAyF6EM7ZgJF_RPI0uB80B8JI3GnYATzM/edit",
+      sheet: {
+        tab1: "工作表1",
+        mapMerchant: "Map Merchant",
+        mapCOG: "Map COG"
+      },
+      column: {
+        commission: "佣金",
+        cog: "單件COG",
+        settlePrice: "結算價",
+        orderStatus: "訂單狀態",
+        deliveryFee: "運費",
+        childOrderId: "子訂單ID",
+        parentOrderId: "主訂單ID",
+        shopId: "店鋪ID"
+      }
+    },
+    settleReport: {
+      url: "https://docs.google.com/spreadsheets/d/1X7vtKzmoay2_uU2vQXlPsPOyA-BYx1HmZJmEPha_e0A/edit",
+      sheet: {
+        mapMerchant: "Map Merchant",
+        consignmentMerchant: "Consignment Merchant"
+      },
+      column: {
+        commissionRate: "Commission Rate",
+        shopId: "01mall Shop #"
+      }
+    }
+  }
 }
 
-const Helper = {
+// Helper to provide wrapper of some app script APIs
+const helper = {
+  // I can't find any native methods to get the position of a column
+  // currently for loop and search by name/text
   getColumnPos: (columnName = '', sheet) => {
     const data = sheet.getDataRange().getValues()
     const columnList = data[0]
@@ -45,73 +56,155 @@ const Helper = {
       }
     }
 
-    if (!index) {
+    if (index === null) {
       throw new Error("Column not found")
     }
 
     return index;
-  }
-}
+  },
+  // the native insertSheet() does not check duplicate/ does not return the Sheet instance after insert
+  // return Sheet instance is useful
+  createSheetBySpreadsheet: (spreadSheet, sheetName) => {
+    if (typeof sheetName !== 'string') {
+      sheetName = `${sheetName}`
+    }
 
-function appendColumns(sheet, columnNames = []) {
-  if (!sheet) {
-    throw new Error("Unknown sheet")
-  }
+    const sheet = spreadSheet.getSheetByName(sheetName)
 
-  if (columnNames.length <= 0) {
-    return;
-  }
+    if (sheet) {
+      return sheet
+    }
 
-  const lastCol = sheet.getLastColumn();
+    spreadSheet.insertSheet(sheetName)
+    return spreadSheet.getSheetByName(sheetName)
+  },
+  // the native copyTo() does not support cross-spreadsheet copy
+  // this one store the entire sheet in memory and set the value into another
+  copyTo: (from, to) => {
+    const source = from.getDataRange().getValues()
+    const target = to.getRange(1, 1, source.length, source[1].length)
+    target.setValues(source)
+  },
+  // delete a row by a column value
+  deleteRowByColumnValue: (sheet, column, value) => {
+    if (!sheet) {
+      throw new Error("Unknown sheet")
+    }
 
-  columnNames.forEach((name, i) => {
-    const range = sheet.getRange(1, lastCol + i + 1)
-    range.setValue(name)
-  })
-}
+    const data = sheet.getDataRange().getValues()
+    const firstRow = data[0]
+    let colIdx = null;
 
-function deleteOrderByStatus(sheet, status) {
-  if (!sheet) {
-    throw new Error("Unknown sheet")
-  }
+    for (let i = 0; i < firstRow.length; i++) {
+      if (firstRow[i] === column) {
+        colIdx = i
+        break
+      }
+    }
 
-  const data = sheet.getDataRange().getValues()
-  const firstRow = data[0]
-  let invoiceStatusCellIdx = null;
+    if (colIdx === null) {
+      throw new Error(`Column ${value} not found`)
+    }
 
-  for (let i = 0; i < firstRow.length; i++) {
-    if (firstRow[i] === COL_ORDER_STATUS) {
-      invoiceStatusCellIdx = i
-      break
+    let rowsDeleted = 0;
+
+    for (let i = 0; i < data.length; i++) {
+      const colValue = data[i][colIdx]
+
+      if (colValue === value) {
+
+        sheet.deleteRow(i + 1 - rowsDeleted)
+        rowsDeleted++;
+      }
     }
   }
+}
 
-  if (invoiceStatusCellIdx === null) {
-    const msg = `Column ${COL_ORDER_STATUS} not found`
-    throw new Error(msg)
-  }
+/**
+ * Append three columns to 01網購_訂單管理報表Template
+ */
+function createColumns() {
+  const orderReportSpreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url)
+  const orderSheet = orderReportSpreadSheet.getSheetByName(config.spreadsheet.orderMgmtReport.sheet.tab1)
 
-  let rowsDeleted = 0;
+  const lastColIdx = orderSheet.getLastColumn();
 
-  for (let i = 0; i < data.length; i++) {
-    const orderStatus = data[i][invoiceStatusCellIdx]
+  const newColumns = [
+    config.spreadsheet.orderMgmtReport.column.commission,
+    config.spreadsheet.orderMgmtReport.column.cog,
+    config.spreadsheet.orderMgmtReport.column.settlePrice,
+  ]
 
-    if (orderStatus === status) {
-
-      sheet.deleteRow(i + 1 - rowsDeleted)
-      rowsDeleted++;
-    }
+  for (let i = 0; i < newColumns.length; i++) {
+    const range = orderSheet.getRange(1, lastColIdx + i + 1)
+    range.setValue(newColumns[i])
   }
 }
 
-function removeDuplicatedDeliveryFee(sheet) {
-  if (!sheet) {
-    throw new Error("unknown sheet")
+
+/**
+ * Create sheet named "Map Merchant" and "Map COG"
+ */
+function createSheet() {
+  const spreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url);
+  helper.createSheetBySpreadsheet(spreadSheet, config.spreadsheet.orderMgmtReport.sheet.mapMerchant)
+  helper.createSheetBySpreadsheet(spreadSheet, config.spreadsheet.orderMgmtReport.sheet.mapCOG)
+}
+
+/**
+ * Copy Map Merchant sheet from 01mall 結算 | Checking log sheet to 01網購_訂單管理報表Template
+ */
+function copyMapMerchant() {
+  const orderSpreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url);
+  const settleSpreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.settleReport.url);
+
+  const mapMerchantFromSettle = settleSpreadSheet.getSheetByName(config.spreadsheet.settleReport.sheet.mapMerchant)
+  const mapMerchantFromOrder = orderSpreadSheet.getSheetByName(config.spreadsheet.orderMgmtReport.sheet.mapMerchant)
+
+  helper.copyTo(mapMerchantFromSettle, mapMerchantFromOrder)
+}
+
+/**
+ * Copy Consignment Merchant sheet from 01mall 結算 | Checking log sheet to 01網購_訂單管理報表Template
+ */
+function copyMapCog() {
+  const orderSpreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url);
+  const settleSpreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.settleReport.url);
+
+  const mapCogtFromSettle = settleSpreadSheet.getSheetByName(config.spreadsheet.settleReport.sheet.consignmentMerchant)
+  const mapCogFromOrder = orderSpreadSheet.getSheetByName(config.spreadsheet.orderMgmtReport.sheet.mapCOG)
+
+  helper.copyTo(mapCogtFromSettle, mapCogFromOrder)
+}
+
+/**
+ * Delete the order(row) if its status is either "已取消(主動)" or "已取消(自動)"
+ */
+function deleteOrderByStatus() {
+  const OrderStatus = {
+    MANUAL_CANCELLED: "已取消(主動)",
+    AUTO_CANCELLED: "已取消(自動)",
   }
 
+  const spreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url);  // get Spreadsheet and Sheet instance
+  const sheet = spreadSheet.getSheetByName(config.spreadsheet.orderMgmtReport.sheet.tab1);
+
+  helper.deleteRowByColumnValue(sheet, config.spreadsheet.orderMgmtReport.column.orderStatus, OrderStatus.AUTO_CANCELLED)
+  helper.deleteRowByColumnValue(sheet, config.spreadsheet.orderMgmtReport.column.orderStatus, OrderStatus.MANUAL_CANCELLED)
+}
+
+/**
+ * For duplicated order IDs, set the rest of its delivery to 0 if there is one >0
+ * If all delivery fees are 0, leave them to be 0
+ */
+function removeDuplicatedDeliveryFee() {
+  const spreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url);  // get Spreadsheet and Sheet instance
+  const sheet = spreadSheet.getSheetByName(config.spreadsheet.orderMgmtReport.sheet.tab1);
+
   const data = sheet.getDataRange().getValues()
-  const delieryFeeColIdx = Helper.getColumnPos(COL_DELIVERY_FEE, sheet)
-  const orderIdColIdx = Helper.getColumnPos(COL_CHILD_ORDER_ID, sheet)
+  const delieryFeeColIdx = helper.getColumnPos(config.spreadsheet.orderMgmtReport.column.deliveryFee, sheet)
+
+  const orderIdColIdx = helper.getColumnPos(config.spreadsheet.orderMgmtReport.column.parentOrderId, sheet)
 
   let scannedOrder = [];
 
@@ -148,55 +241,41 @@ function removeDuplicatedDeliveryFee(sheet) {
   }
 }
 
-function createSheetBySpreadsheet(spreadSheet, sheetName) {
-  const sheet = spreadSheet.getSheetByName(sheetName)
+/**
+ * Copy Commision Rate from one spreadsheet to another
+ */
+function copyCommissionRate() {
+  //Retrieve all sheet instances
+  const settleReportSpreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.settleReport.url)
+  const mapMerchantSheet = settleReportSpreadSheet.getSheetByName(config.spreadsheet.settleReport.sheet.mapMerchant)
+  const orderReportSpreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url)
+  const orderSheet = orderReportSpreadSheet.getSheetByName(config.spreadsheet.orderMgmtReport.sheet.tab1)
 
-  if (sheet) {
-    return sheet
+  //Use helper to get specific column index/position
+  const settleReportCols = {
+    comissionRate: helper.getColumnPos(config.spreadsheet.settleReport.column.commissionRate, mapMerchantSheet),
+    shopId: helper.getColumnPos(config.spreadsheet.settleReport.column.shopId, mapMerchantSheet)
   }
 
-  spreadSheet.insertSheet(sheetName)
-  return spreadSheet.getSheetByName(sheetName)
-}
+  const orderReportCols = {
+    commission: helper.getColumnPos(config.spreadsheet.orderMgmtReport.column.commission, orderSheet),
+    shopId: helper.getColumnPos(config.spreadsheet.orderMgmtReport.column.shopId, orderSheet)
+  }
 
-// copyTo doesn't work across different spreadsheet
-// need to make our own copy function
-function copyTo(from, to) {
-  const source = from.getDataRange().getValues()
-  const range = to.getRange(1, 1, source.length, source[1].length)
-  range.setValues(source)
-}
-
-function restoreMockData() {
-  //for reset the example spreadsheet to test
-  const defaultMock = SpreadsheetApp.openByUrl(MOCK_RESTORE)
-  const from = defaultMock.getSheetByName(HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME)
-  const target = SpreadsheetApp.openByUrl(HK01MALL_ORDER_MGMT_REPORT_URL)
-  const to = target.getSheetByName(HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME)
-
-  copyTo(from, to)
-}
-
-// 01mall shop = 店鋪ID
-function copyCommissionRate() {
-  const hk01MallSettleSS = SpreadsheetApp.openByUrl(HK01MALL_SETTLE_REPORT_URL)
-  const hk01MallOrderMgmtSS = SpreadsheetApp.openByUrl(HK01MALL_ORDER_MGMT_REPORT_URL)
-  const orderSheet = hk01MallOrderMgmtSS.getSheetByName(HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME)
-  const settleSheet = hk01MallSettleSS.getSheetByName(MAP_MERCHANT)
-  const colSettleCommRatePos = Helper.getColumnPos(COL_COMMISSION_RATE, settleSheet)
-  const colSettleShopIdPos = Helper.getColumnPos(COL_SHOP_NO, settleSheet)
-  const colOrderCommPos = Helper.getColumnPos(COL_COMMISSION, orderSheet)
-  const colOrderShopIdPos = Helper.getColumnPos(COL_SHOP_ID, orderSheet)
-  const settleSheetData = settleSheet.getDataRange().getValues();
+  // Get sheets data in 2D array
+  const settleSheetData = mapMerchantSheet.getDataRange().getValues();
   const orderSheetData = orderSheet.getDataRange().getValues();
+
+
+  // Match shop ID and copy the commission rate
   for (let i = 0; i < settleSheetData.length; i++) {
-    const settleCommRate = settleSheetData[i][colSettleCommRatePos]
-    const settleShopId = settleSheetData[i][colSettleShopIdPos]
+    const settleCommRate = settleSheetData[i][settleReportCols.comissionRate]
+    const settleShopId = settleSheetData[i][settleReportCols.shopId]
     for (let j = 0; j < orderSheetData.length; j++) {
-      const orderShopId = orderSheetData[j][colOrderShopIdPos];
+      const orderShopId = orderSheetData[j][orderReportCols.shopId];
 
       if (settleShopId === orderShopId) {
-        const range = orderSheet.getRange(j, colOrderCommPos + 1)
+        const range = orderSheet.getRange(j + 1, orderReportCols.commission + 1)
         range.setValue(settleCommRate)
         break;
       }
@@ -204,35 +283,43 @@ function copyCommissionRate() {
   }
 }
 
-function main() {
-  const hk01MallOrderMgmtSS = SpreadsheetApp.openByUrl(HK01MALL_ORDER_MGMT_REPORT_URL)
-  const orderSheet = hk01MallOrderMgmtSS.getSheetByName(HK01MALL_ORDER_MGMT_REPORT_SHEET_NAME)
+/**
+ * By shop Id (店鋪ID) create a sheet under the same spreadsheet with the ID as the sheet name
+ */
+function createSpreadsheetByShopId() {
+  const spreadSheet = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url);  // get Spreadsheet and Sheet instance
+  const sheet = spreadSheet.getSheetByName(config.spreadsheet.orderMgmtReport.sheet.tab1);
 
-  // Add text [佣金] [單件COG] [結算價] at AQ2; AR2; AS2
-  // appendColumns(orderSheet, [COL_COMMISSION, COL_COG, COL_SETTLEMENT_PRICE])
+  const shopIdColPos = helper.getColumnPos(config.spreadsheet.orderMgmtReport.column.shopId, sheet); // Search where '店鋪id' is on the first row (column position)
 
-  // Base on column O data, remove roll with 已取消(自動) 已取消(主動) in column O 
-  // deleteOrderByStatus(orderSheet, OrderStatus.AUTO_CANCELLED)
-  // deleteOrderByStatus(orderSheet, OrderStatus.MANUAL_CANCELLED)
+  const data = sheet.getDataRange().getValues()  // Get sheet data in 2D Array
 
-  // Create two new tab with name [MAP Merchant] [MAP COG]
-  const mapMerchantSheetDest = createSheetBySpreadsheet(hk01MallOrderMgmtSS, "MAP Merchant")
-  const mapCogSheetDest = createSheetBySpreadsheet(hk01MallOrderMgmtSS, "MAP COG")
+  const shopIdSet = new Set();// to remove duplicated id in array
 
-  // Copy from 01mall 結算 | Checking log sheet into 01網購_訂單管理報表Template
-  const hk01MallSettleSS = SpreadsheetApp.openByUrl(HK01MALL_SETTLE_REPORT_URL)
-  const mapMerchantSheet = hk01MallSettleSS.getSheetByName("MAP Merchant")
-  const mapCogSheet = hk01MallSettleSS.getSheetByName("Consignment Merchant")
+  for (let i = 0; i < data.length; i++) {
+    const shopId = data[i][shopIdColPos]
 
-  // copyTo(mapMerchantSheet, mapMerchantSheetDest)
-  // copyTo(mapCogSheet, mapCogSheetDest)
+    if (shopId === config.spreadsheet.orderMgmtReport.column.shopId) { //skip first column
+      continue;
+    }
 
-  // Remove duplicated order by delivery fee 
-  // If any of orders has delivery fee > 0, remove orders except that one
-  // If none of orders have delivery fee > 0, use any one of them
-  // removeDuplicatedDeliveryFee(orderSheet)
+    shopIdSet.add(shopId)
+  }
 
-  copyCommissionRate()
+  const uniqueShopIds = [...shopIdSet]
 
-  // restoreMockData()
+  for (let i = 0; i < uniqueShopIds.length; i++) {
+    helper.createSheetBySpreadsheet(spreadSheet, `${uniqueShopIds[i]}`) // itereate create spreadsheet by shop id
+  }
+}
+
+/**
+ * Restore spreadsheet back to original
+ */
+function restoreMockData() {
+  const defaultMock = SpreadsheetApp.openByUrl(config.spreadsheet.originalOrderMgmtReport.url)
+  const from = defaultMock.getSheetByName(config.spreadsheet.originalOrderMgmtReport.sheet.tab1)
+  const target = SpreadsheetApp.openByUrl(config.spreadsheet.orderMgmtReport.url)
+  const to = target.getSheetByName(config.spreadsheet.orderMgmtReport.sheet.tab1)
+  helper.copyTo(from, to)
 }
